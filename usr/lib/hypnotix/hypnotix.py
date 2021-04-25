@@ -27,6 +27,8 @@ from imdb import IMDb
 
 from functools import partial
 
+from zeroconf import Zeroconf
+
 setproctitle.setproctitle("hypnotix")
 
 # i18n
@@ -49,6 +51,7 @@ COL_PROVIDER_NAME, COL_PROVIDER = range(2)
 PROVIDER_TYPE_URL = "url"
 PROVIDER_TYPE_LOCAL = "local"
 PROVIDER_TYPE_XTREAM = "xtream"
+PROVIDER_TYPE_TVHEADEND = "tvheadend"
 
 UPDATE_BR_INTERVAL = 5
 
@@ -151,7 +154,8 @@ class MainWindow():
             "video_properties_box", "video_properties_label", \
             "colour_properties_box", "colour_properties_label", \
             "audio_properties_box", "audio_properties_label", \
-            "layout_properties_box", "layout_properties_label"]
+            "layout_properties_box", "layout_properties_label", \
+            "add_provider_spinner"]
 
         for name in widget_names:
             widget = self.builder.get_object(name)
@@ -178,6 +182,8 @@ class MainWindow():
         self.name_entry.connect("changed", self.toggle_ok_sensitivity)
         self.url_entry.connect("changed", self.toggle_ok_sensitivity)
         self.path_entry.connect("changed", self.toggle_ok_sensitivity)
+        self.username_entry.connect("changed", self.toggle_ok_sensitivity)
+        self.password_entry.connect("changed", self.toggle_ok_sensitivity)
 
         self.tv_button.connect("clicked", self.show_groups, TV_GROUP)
         self.movies_button.connect("clicked", self.show_groups, MOVIES_GROUP)
@@ -249,6 +255,7 @@ class MainWindow():
         model.append([PROVIDER_TYPE_URL,_("M3U URL")])
         model.append([PROVIDER_TYPE_LOCAL,_("Local M3U File")])
         model.append([PROVIDER_TYPE_XTREAM,_("Xtream API")])
+        model.append([PROVIDER_TYPE_TVHEADEND,_("TVHeadend")])
         self.provider_type_combo = self.builder.get_object("provider_type_combo")
         renderer = Gtk.CellRendererText()
         self.provider_type_combo.pack_start(renderer, True)
@@ -982,8 +989,52 @@ class MainWindow():
         self.reload(page="providers_page", refresh=True)
 
     def on_provider_type_combo_changed(self, widget):
-        type_id = self.provider_type_combo.get_model()[self.provider_type_combo.get_active()][PROVIDER_TYPE_ID]
+        type_id = self.get_provider_selected_type_id()
         self.set_provider_type(type_id)
+
+        if type_id == PROVIDER_TYPE_TVHEADEND:
+            self.add_provider_spinner.start()
+            self.provider_type_combo.set_sensitive(False)
+            self.discover_tvheadend(self.on_found_tvheadend_provider)
+
+    @async_function
+    def discover_tvheadend(self, cb):
+        print("Searching for TVHeadend on the local network...")
+        zeroconf = Zeroconf()
+        svc_type = '_http._tcp.local.'
+        svc_name = 'Tvheadend'
+        svc_info = None
+        try:
+            svc_info = zeroconf.get_service_info(svc_type, \
+                    svc_name + '.' + svc_type)
+        finally:
+            zeroconf.close()
+            cb(svc_info)
+
+    @idle_function
+    def on_found_tvheadend_provider(self, svc_info):
+        self.add_provider_spinner.stop()
+        self.provider_type_combo.set_sensitive(True)
+        if not svc_info:
+            return
+
+        host = svc_info.server
+        if host.endswith("."):
+            host = host[0:-1]
+        new_name = "TVHeadend on %s:%s" % (host, svc_info.port)
+        url = "http://%s:%s/playlist/channels.m3u" % (host, svc_info.port)
+        print("Found %s" % new_name)
+
+        exists = False
+        for provider_info in self.settings.get_strv("providers"):
+            provider = Provider(name=None, provider_info=provider_info)
+            if provider.name == new_name:
+                exists = True
+        if exists:
+            return
+
+        self.url_entry.set_text(url)
+        self.name_entry.set_text(new_name)
 
     def set_provider_type(self, type_id):
         widgets = [self.path_entry, self.path_label, self.browse_button, \
@@ -1012,6 +1063,13 @@ class MainWindow():
             visible_widgets.append(self.password_label)
             visible_widgets.append(self.epg_label)
             visible_widgets.append(self.epg_entry)
+        elif type_id == PROVIDER_TYPE_TVHEADEND:
+            visible_widgets.append(self.url_entry)
+            visible_widgets.append(self.url_label)
+            visible_widgets.append(self.username_entry)
+            visible_widgets.append(self.username_label)
+            visible_widgets.append(self.password_entry)
+            visible_widgets.append(self.password_label)
         else:
             print("Incorrect provider type: ", type_id)
 
@@ -1019,7 +1077,7 @@ class MainWindow():
             widget.show()
 
     def on_provider_ok_button(self, widget):
-        type_id = self.provider_type_combo.get_model()[self.provider_type_combo.get_active()][PROVIDER_TYPE_ID]
+        type_id = self.get_provider_selected_type_id()
         name = self.name_entry.get_text()
         if self.edit_mode:
             provider = self.marked_provider
@@ -1037,16 +1095,25 @@ class MainWindow():
     def on_provider_cancel_button(self, widget):
         self.navigate_to("providers_page")
 
+    def get_provider_selected_type_id(self):
+        return self.provider_type_combo.get_model()[self.provider_type_combo.get_active()][PROVIDER_TYPE_ID]
+
     def toggle_ok_sensitivity(self, widget=None):
+        type_id = self.get_provider_selected_type_id()
+
         if self.name_entry.get_text() == "":
             self.provider_ok_button.set_sensitive(False)
         elif self.get_url() == "":
+            self.provider_ok_button.set_sensitive(False)
+        elif type_id == PROVIDER_TYPE_TVHEADEND and (
+                self.username_entry.get_text() == "" or
+                self.password_entry.get_text() == ""):
             self.provider_ok_button.set_sensitive(False)
         else:
             self.provider_ok_button.set_sensitive(True)
 
     def get_url(self):
-        type_id = self.provider_type_combo.get_model()[self.provider_type_combo.get_active()][PROVIDER_TYPE_ID]
+        type_id = self.get_provider_selected_type_id()
         if type_id == PROVIDER_TYPE_LOCAL:
             widget = self.path_entry
         else:

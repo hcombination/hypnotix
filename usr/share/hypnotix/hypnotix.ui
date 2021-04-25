@@ -1450,6 +1450,14 @@
                     </child>
                     <child>
                       <placeholder/>
+                      <object class="GtkSpinner" id="add_provider_spinner">
+                        <property name="visible">True</property>
+                        <property name="can_focus">False</property>
+                      </object>
+                      <packing>
+                        <property name="left_attach">2</property>
+                        <property name="top_attach">2</property>
+                      </packing>
                     </child>
                     <child>
                       <placeholder/>

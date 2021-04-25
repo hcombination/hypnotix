@@ -3,6 +3,8 @@ import configparser
 import gi
 import os
 import requests
+from requests.auth import HTTPDigestAuth
+from urllib.parse import urlparse
 import shutil
 import string
 import threading
@@ -102,6 +104,8 @@ class Channel():
                 params = dict(PARAMS.findall(res['params']))
                 if "tvg-name" in params and params['tvg-name'].strip() != "":
                     self.name = params['tvg-name'].strip()
+                if "logo" in params and params['logo'].strip() != "":
+                    self.logo = params['logo'].strip()
                 if "tvg-logo" in params and params['tvg-logo'].strip() != "":
                     self.logo = params['tvg-logo'].strip()
                 if "group-title" in params and params['group-title'].strip() != "":
@@ -136,6 +140,28 @@ class Manager():
             if "file://" in provider.url:
                 # local file
                 provider.path = provider.url.replace("file://", "")
+            elif "tvheadend" in provider.type_id:
+                if refresh or not os.path.exists(provider.path):
+                    headers = {
+                        'User-Agent': self.settings.get_string("user-agent"),
+                        'Referer': self.settings.get_string("http-referer")
+                    }
+                    credentials = HTTPDigestAuth(provider.username, provider.password)
+                    response = requests.get(provider.url, auth=credentials, headers=headers, timeout=10)
+                    parsed_url = urlparse(provider.url)
+                    if response.status_code == 200:
+                        try:
+                            source = response.content.decode("UTF-8")
+                        except UnicodeDecodeError as e:
+                            source = response.content.decode("latin1")
+                        old = "%s://%s" % (parsed_url.scheme, parsed_url.netloc)
+                        new = "%s://%s:%s@%s" % (parsed_url.scheme, provider.username, \
+                            provider.password, parsed_url.netloc)
+                        source = source.replace(old, new)
+                        with open(provider.path, "w") as file:
+                            file.write(source)
+                    else:
+                        print("HTTP error %d while retrieving from %s!" % (response.status_code, provider.url))
             elif "://" in provider.url:
                 # Other protocol, assume it's http
                 if refresh or not os.path.exists(provider.path):
